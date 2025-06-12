@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Two-Body Oscillation Simulation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+        }
+        .control-panel {
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+        label {
+            color: #cbd5e1; /* slate-300 */
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 8px;
+            border-radius: 5px;
+            background: #475569; /* slate-600 */
+            outline: none;
+            opacity: 0.7;
+            transition: opacity .2s;
+        }
+        input[type="range"]:hover {
+            opacity: 1;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #60a5fa; /* blue-400 */
+            cursor: pointer;
+            border: 2px solid #1e293b; /* slate-800 */
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #60a5fa; /* blue-400 */
+            cursor: pointer;
+            border: 2px solid #1e293b; /* slate-800 */
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white flex flex-col items-center justify-center h-screen m-0 p-4">
+
+    <!-- Canvas for the simulation -->
+    <canvas id="simulationCanvas" class="w-full h-full absolute top-0 left-0"></canvas>
+
+    <!-- Control Panel -->
+    <div class="control-panel absolute bottom-4 md:bottom-8 bg-slate-800/50 p-4 md:p-6 rounded-xl shadow-2xl border border-slate-700 w-11/12 max-w-2xl z-10">
+        <h1 class="text-xl md:text-2xl font-bold text-center mb-4 text-blue-300">Coupled Oscillator Controls</h1>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- Mass m1 Controls -->
+            <div class="space-y-2">
+                <label for="mass1" class="font-medium flex justify-between">Mass m₁: <span id="mass1Value" class="font-mono text-blue-300">10</span></label>
+                <input type="range" id="mass1" min="1" max="50" value="10" class="w-full">
+            </div>
+
+            <!-- Mass m2 Controls -->
+            <div class="space-y-2">
+                <label for="mass2" class="font-medium flex justify-between">Mass M₂: <span id="mass2Value" class="font-mono text-blue-300">20</span></label>
+                <input type="range" id="mass2" min="1" max="50" value="20" class="w-full">
+            </div>
+
+            <!-- Spring Constant k Controls -->
+            <div class="space-y-2">
+                <label for="springConstant" class="font-medium flex justify-between">Spring Stiffness (k): <span id="springConstantValue" class="font-mono text-blue-300">0.5</span></label>
+                <input type="range" id="springConstant" min="0.1" max="2" step="0.1" value="0.5" class="w-full">
+            </div>
+
+             <!-- Damping Controls -->
+             <div class="space-y-2">
+                <label for="damping" class="font-medium flex justify-between">Damping: <span id="dampingValue" class="font-mono text-blue-300">0.995</span></label>
+                <input type="range" id="damping" min="0.98" max="1" step="0.001" value="0.995" class="w-full">
+            </div>
+        </div>
+        
+        <!-- Action Buttons -->
+        <div class="flex justify-center mt-6 space-x-4">
+            <button id="resetButton" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg shadow-md transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-opacity-75">
+                Reset Simulation
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simulationCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // --- FIX: Declare particle variables here to ensure they are accessible globally in the script ---
+        let p1, p2; // p1 and p2 are particle objects
+
+        // Set canvas dimensions
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            // When resizing, re-initialize to adjust equilibrium length etc.
+            // This check is now safe because p1 and p2 are declared and will be undefined on first run.
+            if(p1 && p2) {
+                init();
+            }
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        
+        // --- DOM Elements for Controls ---
+        const mass1Slider = document.getElementById('mass1');
+        const mass2Slider = document.getElementById('mass2');
+        const springConstantSlider = document.getElementById('springConstant');
+        const dampingSlider = document.getElementById('damping');
+        const mass1ValueSpan = document.getElementById('mass1Value');
+        const mass2ValueSpan = document.getElementById('mass2Value');
+        const springConstantValueSpan = document.getElementById('springConstantValue');
+        const dampingValueSpan = document.getElementById('dampingValue');
+        const resetButton = document.getElementById('resetButton');
+
+        // --- Simulation Parameters ---
+        let m1, m2, k, damping, L0;
+
+        // Particle class
+        class Particle {
+            constructor(x, y, mass, color) {
+                this.pos = { x: x, y: y };
+                this.vel = { x: 0, y: 0 };
+                this.acc = { x: 0, y: 0 };
+                this.mass = mass;
+                this.radius = Math.sqrt(mass) * 3;
+                this.color = color;
+            }
+
+            applyForce(force) {
+                this.acc.x += force.x / this.mass;
+                this.acc.y += force.y / this.mass;
+            }
+
+            update(damping) {
+                this.vel.x += this.acc.x;
+                this.vel.y += this.acc.y;
+                this.pos.x += this.vel.x;
+                this.pos.y += this.vel.y;
+                
+                // Apply damping to simulate energy loss
+                this.vel.x *= damping;
+                this.vel.y *= damping;
+
+                this.acc.x = 0;
+                this.acc.y = 0;
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.pos.x, this.pos.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+        
+        // --- Initialization ---
+        function init() {
+            m1 = parseFloat(mass1Slider.value);
+            m2 = parseFloat(mass2Slider.value);
+            k = parseFloat(springConstantSlider.value);
+            damping = parseFloat(dampingSlider.value);
+            
+            mass1ValueSpan.textContent = m1.toFixed(1);
+            mass2ValueSpan.textContent = m2.toFixed(1);
+            springConstantValueSpan.textContent = k.toFixed(2);
+            dampingValueSpan.textContent = damping.toFixed(3);
+
+            L0 = canvas.width * 0.2; // Equilibrium length of the spring
+
+            // Initial positions and masses
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            
+            p1 = new Particle(centerX - canvas.width * 0.15, centerY, m1, '#60a5fa'); // blue-400
+            p2 = new Particle(centerX + canvas.width * 0.15, centerY, m2, '#f87171'); // red-400
+        }
+
+        // --- Event Listeners for Controls ---
+        mass1Slider.addEventListener('input', () => {
+             m1 = parseFloat(mass1Slider.value);
+             mass1ValueSpan.textContent = m1.toFixed(1);
+             p1.mass = m1;
+             p1.radius = Math.sqrt(m1) * 3;
+        });
+        mass2Slider.addEventListener('input', () => {
+            m2 = parseFloat(mass2Slider.value);
+            mass2ValueSpan.textContent = m2.toFixed(1);
+            p2.mass = m2;
+            p2.radius = Math.sqrt(m2) * 3;
+        });
+        springConstantSlider.addEventListener('input', () => {
+            k = parseFloat(springConstantSlider.value);
+            springConstantValueSpan.textContent = k.toFixed(2);
+        });
+        dampingSlider.addEventListener('input', () => {
+            damping = parseFloat(dampingSlider.value);
+            dampingValueSpan.textContent = damping.toFixed(3);
+        });
+        resetButton.addEventListener('click', init);
+
+        // --- Animation Loop ---
+        function animate() {
+            // Clear canvas with a trail effect
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.2)'; // bg-slate-900 with alpha
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // --- Draw Equations on Screen ---
+            ctx.fillStyle = "rgba(203, 213, 225, 0.6)"; // slate-300 with alpha
+            ctx.textAlign = 'left';
+            ctx.font = "14px 'Inter', sans-serif";
+            ctx.fillText("Lagrangian (L = T - V):", 20, 30);
+            ctx.font = "italic 18px 'Inter', sans-serif";
+            ctx.fillText("L = ½m₁ẋ² + ½M₂ẏ² - V(x-y)", 20, 55);
+            ctx.font = "14px 'Inter', sans-serif";
+            ctx.fillText("Potential (V) for Spring:", 20, 85);
+            ctx.font = "italic 18px 'Inter', sans-serif";
+            ctx.fillText("V = ½k(x-y)²", 20, 110);
+            // --- End Equations ---
+
+
+            // Calculate the vector between the two particles
+            const dx = p2.pos.x - p1.pos.x;
+            const dy = p2.pos.y - p1.pos.y;
+            // Avoid division by zero if particles are at the same spot
+            const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 1e-6);
+            const displacement = distance - L0;
+
+            // Hooke's Law: F = -k * displacement
+            const forceMagnitude = k * displacement;
+
+            // Calculate force components
+            const force = {
+                x: (forceMagnitude * dx) / distance,
+                y: (forceMagnitude * dy) / distance
+            };
+            
+            // Apply forces to each particle (Newton's 3rd Law)
+            p1.applyForce(force);
+            p2.applyForce({ x: -force.x, y: -force.y });
+
+            // Update and draw particles
+            p1.update(damping);
+            p2.update(damping);
+            
+            // Wall bouncing
+            checkWallCollision(p1);
+            checkWallCollision(p2);
+            
+            // Draw the spring connecting them
+            ctx.beginPath();
+            ctx.moveTo(p1.pos.x, p1.pos.y);
+            ctx.lineTo(p2.pos.x, p2.pos.y);
+            // Style the spring based on tension/compression
+            const stretch = (distance / L0) - 1.0;
+            const red = Math.max(0, Math.min(255, 100 + stretch * 500));
+            const blue = Math.max(0, Math.min(255, 100 - stretch * 500));
+            ctx.strokeStyle = `rgb(${red}, 150, ${blue})`;
+            ctx.lineWidth = 2 + Math.abs(stretch);
+            ctx.stroke();
+
+            // Draw the particles on top of the spring
+            p1.draw(ctx);
+            p2.draw(ctx);
+            
+            requestAnimationFrame(animate);
+        }
+
+        function checkWallCollision(particle) {
+            if (particle.pos.x < particle.radius) {
+                particle.pos.x = particle.radius;
+                particle.vel.x *= -0.8; // Inelastic collision
+            } else if (particle.pos.x > canvas.width - particle.radius) {
+                particle.pos.x = canvas.width - particle.radius;
+                particle.vel.x *= -0.8;
+            }
+
+            if (particle.pos.y < particle.radius) {
+                particle.pos.y = particle.radius;
+                particle.vel.y *= -0.8;
+            } else if (particle.pos.y > canvas.height - particle.radius) {
+                particle.pos.y = canvas.height - particle.radius;
+                particle.vel.y *= -0.8;
+            }
+        }
+        
+        // Initial setup and start the animation
+        window.onload = function () {
+            init();
+            animate();
+        }
+    </script>
+</body>
+</html>
